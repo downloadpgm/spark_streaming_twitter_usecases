@@ -1,2 +1,2 @@
-# spark_streaming_twitter_usecases
-spark_streaming_twitter_usecases
+# spark_twitter_use_cases
+spark_twitter_use_cases

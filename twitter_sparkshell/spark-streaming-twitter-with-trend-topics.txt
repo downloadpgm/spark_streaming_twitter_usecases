@@ -1,0 +1,74 @@
+start-dfs.sh      # start the hadoop daemons
+start-master.sh   # start the spark cluster master 
+start-slaves.sh   # start the spark cluster slaves
+
+# download the related twitter jars
+spark-shell --packages org.apache.bahir:spark-streaming-twitter_2.11:2.3.2
+
+# copy the related twitter jars to $SPARK_HOME/jars
+cp .ivy2/jars/* $SPARK_HOME/jars
+
+# restart the spark-shell using the spark standalone cluster
+spark-shell --master spark://spks:7077
+
+-----------------------
+
+import org.apache.spark._
+import org.apache.spark.streaming._
+import org.apache.spark.streaming.twitter._
+import twitter4j.Status
+import twitter4j.auth.OAuthAuthorization
+import twitter4j.conf.ConfigurationBuilder
+
+val builder = new ConfigurationBuilder()
+builder.setDebugEnabled(true)
+builder.setOAuthConsumerKey("<ConsumerKey>")
+builder.setOAuthConsumerSecret("<ConsumerSecret>")
+builder.setOAuthAccessToken("<AccessToken>")
+builder.setOAuthAccessTokenSecret("<AccessTokenSecret>")
+
+val auth = new OAuthAuthorization(builder.build)
+
+val ssc = new StreamingContext(sc,Seconds(10))
+
+val filters = Array("covid-19", "coronavirus")
+
+val twitterStream = TwitterUtils.createStream(ssc, Some(auth), filters )
+
+val tweetsFilteredByLang = twitterStream.filter{tweet => tweet.getLang() == "en"}
+
+val statuses = tweetsFilteredByLang.map{ tweet => tweet.getText()}
+
+val words = statuses.flatMap{status => status.split("""\s+""")}
+
+val hashTags = words.filter{word => word.startsWith("#")}
+
+val hashTagPairs = hashTags.map{hashtag => (hashtag, 1)}
+
+val tagsWithCounts = hashTagPairs.updateStateByKey( 
+  (counts: Seq[Int], prevCount: Option[Int]) => 
+     prevCount.map{c => c + counts.sum}.orElse{Some(counts.sum)}
+  )
+
+// val minThreshold = 100
+val topHashTags = tagsWithCounts.filter{ case(t, c) => c > 10 }
+
+val sortedTopHashTags = topHashTags.transform{ rdd => rdd.sortBy({case(w, c) => c}, false)}
+
+sortedTopHashTags.foreachRDD( rdd => {
+  val topList = rdd.take(10)
+  topList.foreach(println)
+  println("========================")
+  })
+
+ssc.checkpoint("hdfs://spkm:9000/checkpoint")
+
+ssc.start()
+
+-------------------------------------
+
+tweets.foreachRDD(rdd => {
+  val topList = rdd.take(10)
+  println("\nPopular topics in last 60 seconds (%s total):".format(rdd.count()))
+  topList.foreach{case (count, tag) => println("%s (%s tweets)".format(tag, count))}
+})
